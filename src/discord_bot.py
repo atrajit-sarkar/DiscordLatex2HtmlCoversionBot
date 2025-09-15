@@ -13,6 +13,7 @@ from src.ResourceManager import ResourceManager
 from src.UserOptionsManager import UserOptionsManager
 from src.UsersManager import UsersManager
 from src.LoggingServer import LoggingServer
+from src.HtmlHost import HtmlHost
 
 
 class PreambleModal(discord.ui.Modal, title="Set Custom LaTeX Preamble"):
@@ -132,10 +133,41 @@ class Tex2HtmlModal(discord.ui.Modal, title="LaTeX → HTML Converter"):
                 await interaction.followup.send("Converting to HTML using TeX4ht… this may take a few seconds ⏳", ephemeral=True)
             except Exception:
                 pass
-            zip_stream = bot.converter.convertToHtml(str(self.code.value), user_id, session_id, html_format=self.html_format, make4ht_args=self.make4ht_args)
+            # If HtmlHost is running, keep temp dir so we can host it
+            prev_keep = os.environ.get("LATEXBOT_KEEP_HTML_TEMP")
+            restore_keep = False
+            if getattr(bot, "html_host", None) and bot.html_host and bot.html_host.is_running():
+                os.environ["LATEXBOT_KEEP_HTML_TEMP"] = "1"
+                restore_keep = True
+            try:
+                zip_stream = bot.converter.convertToHtml(str(self.code.value), user_id, session_id, html_format=self.html_format, make4ht_args=self.make4ht_args)
+            finally:
+                # Restore env var if we changed it
+                if restore_keep:
+                    if prev_keep is None:
+                        try:
+                            del os.environ["LATEXBOT_KEEP_HTML_TEMP"]
+                        except KeyError:
+                            pass
+                    else:
+                        os.environ["LATEXBOT_KEEP_HTML_TEMP"] = prev_keep
             zip_stream.seek(0)
             file = discord.File(fp=zip_stream, filename="latex_website.zip")
-            await interaction.followup.send(content="Here is your website as a ZIP (extract and open index.html):", file=file)
+            # If hosting available, register directory and include preview link
+            preview = None
+            if getattr(bot, "html_host", None) and bot.html_host and bot.html_host.is_running():
+                try:
+                    ttl = int(os.environ.get("HTML_TTL_SECONDS", "3600"))
+                    workdir = os.path.join("build", f"html_{session_id}")
+                    if os.path.isdir(workdir):
+                        preview = bot.html_host.register_dir(workdir, ttl_seconds=ttl)
+                except Exception as e:
+                    self.logger.warn("Failed to register HTML preview: %s", e)
+                    preview = None
+            content_msg = "Here is your website as a ZIP (extract and open index.html)."
+            if preview:
+                content_msg += f"\nTemporary preview: {preview} (expires in ~{int(os.environ.get('HTML_TTL_SECONDS', '3600'))//60} minutes)"
+            await interaction.followup.send(content=content_msg, file=file)
         except ValueError as err:
             await interaction.followup.send(f"Conversion error:\n{err}", ephemeral=True)
         except Exception as err:
@@ -189,6 +221,17 @@ class InLatexDiscordBot(commands.Bot):
         # Ensure dirs/files exist
         os.makedirs("build", exist_ok=True)
         os.makedirs("log", exist_ok=True)
+        # Initialize and start HTML host if configured
+        try:
+            host = os.environ.get("HTML_HOST", "127.0.0.1")
+            port = int(os.environ.get("HTML_PORT", "8088"))
+            base_url = os.environ.get("HTML_BASE_URL") or f"http://{host}:{port}"
+            self.html_host = HtmlHost(host=host, port=port, base_url=base_url)
+            await self.html_host.start()
+            self.logger.debug("HtmlHost running at %s", self.html_host.base_url)
+        except Exception as e:
+            self.logger.warn("HtmlHost not started: %s", e)
+            self.html_host = None
 
     async def on_message(self, message: discord.Message):
         # Ignore our own messages and other bots

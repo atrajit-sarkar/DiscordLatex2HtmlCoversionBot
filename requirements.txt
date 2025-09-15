@@ -2,3 +2,4 @@ discord.py>=2.4.0
 python-telegram-bot<13.0
 tqdm
 python-dotenv
+aiohttp>=3.9.0
