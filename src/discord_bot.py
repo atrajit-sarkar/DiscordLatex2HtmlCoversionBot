@@ -491,6 +491,7 @@ async def diagnose_cmd(interaction: discord.Interaction):
     gs_path = shutil.which("gs") or shutil.which("gswin64c") or shutil.which("gswin32c")
     htlatex_path = shutil.which("htlatex")
     make4ht_path = shutil.which("make4ht")
+    dvisvgm_path = shutil.which("dvisvgm")
     # Fallback: if htlatex is found, try same dir for make4ht
     if not make4ht_path and htlatex_path:
         try:
@@ -520,6 +521,10 @@ async def diagnose_cmd(interaction: discord.Interaction):
         lines.append(f"make4ht: found at {make4ht_path}")
     else:
         lines.append("make4ht: NOT FOUND — install TeX Live 'make4ht' and ensure it is on PATH (or in the same folder as htlatex)")
+    if dvisvgm_path:
+        lines.append(f"dvisvgm: found at {dvisvgm_path}")
+    else:
+        lines.append("dvisvgm: NOT FOUND — install TeX Live 'dvisvgm' for SVG outputs used by TikZ in HTML")
     # Show effective PATH prefix for troubleshooting
     try:
         import os

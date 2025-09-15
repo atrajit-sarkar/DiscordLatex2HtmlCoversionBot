@@ -231,6 +231,13 @@ class LatexConverter():
         """Run TeX→HTML using htlatex (preferred) or make4ht in the given workdir.
         Raises ValueError with a helpful message on failure.
         """
+        # Allow overriding timeout via environment for heavy docs (e.g., TikZ)
+        try:
+            env_timeout = int(os.environ.get("LATEXBOT_HTML_TIMEOUT", "0"))
+            if env_timeout > 0:
+                timeout = env_timeout
+        except Exception:
+            pass
         exe = self._get_htlatex_executable()
         if not exe:
             raise ValueError("htlatex/make4ht not found. Please install TeX Live and ensure 'htlatex' (or 'make4ht') is on PATH.")
@@ -275,6 +282,12 @@ class LatexConverter():
                 cmd.append(os.path.basename(tex_path))
                 # Merge extensions from format (ext_tokens) and user-supplied tokens
                 all_exts = ext_tokens + user_exts
+                # Prefer SVG output for figures with dvisvgm and stable names; only for HTML targets
+                if base_fmt in ("html5", "xhtml"):
+                    if "svg" not in all_exts:
+                        all_exts.append("svg")
+                    if "dvisvgm_hashes" not in all_exts:
+                        all_exts.append("dvisvgm_hashes")
                 if all_exts:
                     ext_str = ",".join(all_exts)
                     cmd.append(ext_str)

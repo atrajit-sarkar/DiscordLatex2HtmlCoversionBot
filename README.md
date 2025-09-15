@@ -114,6 +114,7 @@ Notes:
 
 Additional prerequisites for this feature:
 - TeX Live installed with TeX4ht components (`htlatex` or `make4ht`) available on PATH
+ - For TikZ/graphics in HTML, `dvisvgm` must be available (we default to SVG output + hashed names)
 
 ## Customization
 The main feature of the bot is the customizable preamble used in the document into which your expression will be inserted:
@@ -145,7 +146,9 @@ You can set your own default HTML output format used by `/tex2html`:
 - Preamble length in the modal is limited to 4000 characters for safety.
 - Rendering dependencies: `pdflatex` and Ghostscript must be available on PATH.
 - For HTML conversion, TeX4ht tools (`make4ht` is preferred; falls back to `htlatex`) must be available on PATH. Use `/diagnose` to see what is detected.
-- Debugging TeX4ht: set `LATEXBOT_KEEP_HTML_TEMP=true` to keep temporary HTML build folders under `build/`.
+ - Debugging TeX4ht: set `LATEXBOT_KEEP_HTML_TEMP=true` to keep temporary HTML build folders under `build/`.
+ - We enable SVG output by default via `svg` + `dvisvgm_hashes` make4ht extensions. Ensure `dvisvgm` is on PATH; `/diagnose` now reports it.
+ - TikZ/SVG images: the bot enables the `dvisvgm_hashes` extension automatically for HTML formats to produce safe SVG filenames and avoid broken image links. If your documents are heavy, you can increase the TeX4ht timeout with `LATEXBOT_HTML_TIMEOUT` (seconds).
 
 ## Assets
 - Example images used above are located under `resources/test/`.
