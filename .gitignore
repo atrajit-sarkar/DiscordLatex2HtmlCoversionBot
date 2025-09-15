@@ -1,0 +1,6 @@
+*pyc
+build/*
+*checkpoints
+*.ipynb
+log/*
+.env

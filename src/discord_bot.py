@@ -1,0 +1,516 @@
+import os
+import asyncio
+import re
+from typing import Optional
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+
+from src.LatexConverter import LatexConverter
+from src.PreambleManager import PreambleManager
+from src.ResourceManager import ResourceManager
+from src.UserOptionsManager import UserOptionsManager
+from src.UsersManager import UsersManager
+from src.LoggingServer import LoggingServer
+
+
+class PreambleModal(discord.ui.Modal, title="Set Custom LaTeX Preamble"):
+    preamble = discord.ui.TextInput(label="Preamble", style=discord.TextStyle.paragraph, required=True, max_length=4000)
+
+    def __init__(self, pm: PreambleManager, rm: ResourceManager, user_id: int):
+        super().__init__()
+        self.pm = pm
+        self.rm = rm
+        self.user_id = user_id
+        self.logger = LoggingServer.getInstance()
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        valid, msg = self.pm.validatePreamble(str(self.preamble.value))
+        if valid:
+            self.pm.putPreambleToDatabase(self.user_id, str(self.preamble.value))
+            await interaction.followup.send(self.rm.getString("preamble_registered"), ephemeral=True)
+        else:
+            await interaction.followup.send(msg, ephemeral=True)
+
+
+class SettingsView(discord.ui.View):
+    def __init__(self, uom: UserOptionsManager, user_id: int, pm: Optional[PreambleManager] = None, rm: Optional[ResourceManager] = None):
+        super().__init__(timeout=180)
+        self.uom = uom
+        self.user_id = user_id
+        self.pm = pm
+        self.rm = rm
+
+    @discord.ui.button(label="Show code in caption", style=discord.ButtonStyle.primary)
+    async def code_on(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.uom.setCodeInCaptionOption(self.user_id, True)
+        await interaction.response.send_message("Enabled code in caption.", ephemeral=True)
+
+    @discord.ui.button(label="Hide code in caption", style=discord.ButtonStyle.secondary)
+    async def code_off(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.uom.setCodeInCaptionOption(self.user_id, False)
+        await interaction.response.send_message("Disabled code in caption.", ephemeral=True)
+
+    @discord.ui.button(label="Edit preamble", style=discord.ButtonStyle.success)
+    async def edit_preamble(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.pm or not self.rm:
+            await interaction.response.send_message("Preamble manager not available.", ephemeral=True)
+            return
+        await interaction.response.send_modal(PreambleModal(self.pm, self.rm, interaction.user.id))
+
+    @discord.ui.select(placeholder="Select HTML format (for /tex2html)", min_values=1, max_values=1, options=[
+        discord.SelectOption(label="html5", value="html5"),
+        discord.SelectOption(label="html5+mathjax", value="html5+mathjax"),
+        discord.SelectOption(label="xhtml", value="xhtml"),
+        discord.SelectOption(label="odt", value="odt"),
+        discord.SelectOption(label="epub", value="epub"),
+    ])
+    async def set_html_format(self, interaction: discord.Interaction, select: discord.ui.Select):
+        fmt = select.values[0]
+        self.uom.setHtmlFormatOption(self.user_id, fmt)
+        await interaction.response.send_message(f"HTML format set to {fmt}.", ephemeral=True)
+
+
+class OverleafModal(discord.ui.Modal, title="Overleaf-like LaTeX Editor"):
+    code = discord.ui.TextInput(
+        label="LaTeX code",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=4000,
+        placeholder="Paste or type your LaTeX here. Use $...$ for inline math or \\[...\\] for display."
+    )
+
+    def __init__(self):
+        super().__init__()
+        self.logger = LoggingServer.getInstance()
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Render like normal DM code handling: return PNG + PDF
+        await interaction.response.defer(thinking=True)
+        try:
+            user_id = interaction.user.id
+            session_id = f"{interaction.id}_{user_id}"
+            image_stream, pdf_stream = bot.converter.convertExpression(str(self.code.value), user_id, session_id, returnPdf=True)
+            image_stream.seek(0)
+            pdf_stream.seek(0)
+            files = [
+                discord.File(fp=image_stream, filename="expression.png"),
+                discord.File(fp=pdf_stream, filename="expression.pdf")
+            ]
+            await interaction.followup.send(files=files)
+        except ValueError as err:
+            await interaction.followup.send(f"Syntax error or processing issue:\n{err}", ephemeral=True)
+        except Exception as err:
+            self.logger.warn("Unhandled exception in OverleafModal: %s", str(err))
+            await interaction.followup.send(f"Unexpected error during rendering. {type(err).__name__}: {err}", ephemeral=True)
+
+
+class Tex2HtmlModal(discord.ui.Modal, title="LaTeX → HTML Converter"):
+    code = discord.ui.TextInput(
+        label="LaTeX code",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=4000,
+        placeholder="Paste a full document or an expression; TeX Live (htlatex) will generate a website."
+    )
+
+    def __init__(self, html_format: str | None = None, make4ht_args: list[str] | None = None):
+        super().__init__()
+        self.logger = LoggingServer.getInstance()
+        self.html_format = html_format
+        self.make4ht_args = make4ht_args or []
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)
+        try:
+            user_id = interaction.user.id
+            session_id = f"{interaction.id}_{user_id}"
+            # Provide a progress message via followup edit
+            try:
+                await interaction.followup.send("Converting to HTML using TeX4ht… this may take a few seconds ⏳", ephemeral=True)
+            except Exception:
+                pass
+            zip_stream = bot.converter.convertToHtml(str(self.code.value), user_id, session_id, html_format=self.html_format, make4ht_args=self.make4ht_args)
+            zip_stream.seek(0)
+            file = discord.File(fp=zip_stream, filename="latex_website.zip")
+            await interaction.followup.send(content="Here is your website as a ZIP (extract and open index.html):", file=file)
+        except ValueError as err:
+            await interaction.followup.send(f"Conversion error:\n{err}", ephemeral=True)
+        except Exception as err:
+            self.logger.warn("Unhandled exception in Tex2HtmlModal: %s", str(err))
+            await interaction.followup.send(f"Unexpected error during HTML conversion. {type(err).__name__}: {err}", ephemeral=True)
+
+
+class InLatexDiscordBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        # Enable message content intent only if explicitly requested via env var
+        enable_message_content = os.environ.get("DISCORD_ENABLE_MESSAGE_CONTENT", "").lower() in ("1", "true", "yes", "on")
+        if enable_message_content:
+            intents.message_content = True
+        # Use mention-only prefix to avoid conflicts with slash commands when users type '/start' as plain text
+        super().__init__(command_prefix=commands.when_mentioned, intents=intents)
+
+        self.logger = LoggingServer.getInstance()
+        self.rm = ResourceManager()
+        self.uom = UserOptionsManager()
+        self.um = UsersManager()
+        self.pm = PreambleManager(self.rm)
+        self.converter = LatexConverter(self.pm, self.uom)
+
+    async def setup_hook(self) -> None:
+        guild_id = os.environ.get("DISCORD_GUILD_ID")
+        # Always sync global so commands appear in DMs and all guilds (global propagation may take up to ~1 hour)
+        try:
+            global_cmds = await self.tree.sync()
+            self.logger.debug("Synced %d global application commands.", len(global_cmds))
+        except Exception as e:
+            self.logger.warn("Global command sync failed: %s", e)
+
+        # If a guild is specified, also copy and sync to that guild for instant availability
+        if guild_id and guild_id.isdigit():
+            guild = discord.Object(id=int(guild_id))
+            try:
+                # Ensure the current global commands are present in the guild tree
+                self.tree.copy_global_to(guild=guild)
+            except Exception:
+                # It's fine if this fails due to duplication
+                pass
+            try:
+                guild_cmds = await self.tree.sync(guild=guild)
+                self.logger.debug("Synced %d guild application commands to guild %s.", len(guild_cmds), guild_id)
+            except Exception as e:
+                self.logger.warn("Guild command sync failed for guild %s: %s", guild_id, e)
+
+    async def on_ready(self):
+        self.logger.debug("Discord bot logged in as %s", self.user.name)
+        # Ensure dirs/files exist
+        os.makedirs("build", exist_ok=True)
+        os.makedirs("log", exist_ok=True)
+
+    async def on_message(self, message: discord.Message):
+        # Ignore our own messages and other bots
+        if message.author.bot:
+            return
+        # Always allow DMs; for guild messages require message content intent env toggle
+        in_dm = message.guild is None
+        enable_guild_msgs = os.environ.get("DISCORD_ENABLE_MESSAGE_CONTENT", "").lower() in ("1", "true", "yes", "on")
+
+        # Heuristics to detect LaTeX content
+        content = message.content or ""
+        content_stripped = content.strip()
+        has_latex_markers = (
+            "\\documentclass" in content_stripped or
+            content_stripped.startswith("$") or
+            content_stripped.startswith("\\[") or
+            content_stripped.startswith("\\(") or
+            content_stripped.startswith("\\begin") or
+            (content_stripped.count("$") >= 2)
+        )
+
+        # Support ```latex code blocks
+        if content_stripped.lower().startswith("```latex") and content_stripped.endswith("```"):
+            # Extract inner code
+            inner = content_stripped[len("```latex"):].strip()
+            if inner.endswith("```"):
+                inner = inner[:-3].strip()
+            content_stripped = inner
+            has_latex_markers = True
+
+        # Probable LaTeX tokens (used for auto-wrap when no explicit math delimiters are present)
+        probable_latex = bool(re.search(r"\\(frac|sum|int|sqrt|alpha|beta|gamma|delta|theta|lambda|pi|sin|cos|tan|log|ln|begin|end|mathrm|mathbf|mathbb|mathcal|vec|bar|hat|tilde)", content_stripped)) or ("^" in content_stripped or "_" in content_stripped)
+
+        # Auto-wrap if no explicit delimiters but likely LaTeX
+        content_for_render = content_stripped
+        if content_stripped and not any(tok in content_stripped for tok in ("\\documentclass", "\\(", "\\[")) and content_stripped.count("$") < 2:
+            if probable_latex:
+                # Choose display for multiline or block-like content; inline otherwise
+                is_multiline = "\n" in content_stripped or content_stripped.startswith("$$") or content_stripped.endswith("$$") or "\\begin" in content_stripped
+                if is_multiline:
+                    content_for_render = "\\[" + content_stripped.strip("$") + "\\]"
+                else:
+                    content_for_render = "$" + content_stripped.strip("$") + "$"
+                has_latex_markers = True
+
+        # Only proceed if allowed and markers found
+        if (in_dm or enable_guild_msgs) and has_latex_markers and content_for_render:
+            try:
+                user_id = message.author.id
+                session_id = f"{message.id}_{user_id}"
+                wait_msg = None
+                async with message.channel.typing():
+                    # Let user know we're working
+                    try:
+                        wait_msg = await message.reply("Rendering your LaTeX… please wait ⏳")
+                    except Exception:
+                        pass
+                    image_stream, pdf_stream = self.converter.convertExpression(content_for_render, user_id, session_id, returnPdf=True)
+                    image_stream.seek(0)
+                    pdf_stream.seek(0)
+                    files = [
+                        discord.File(fp=image_stream, filename="expression.png"),
+                        discord.File(fp=pdf_stream, filename="expression.pdf")
+                    ]
+                # Send result and remove wait message if possible
+                await message.reply(files=files)
+                if wait_msg:
+                    try:
+                        await wait_msg.delete()
+                    except Exception:
+                        pass
+            except ValueError as err:
+                try:
+                    await message.reply(f"Syntax error or processing issue:\n{err}")
+                except Exception:
+                    pass
+            except Exception as err:
+                self.logger.warn("Unhandled exception in message render: %s", str(err))
+                try:
+                    await message.reply(f"Unexpected error during rendering. {type(err).__name__}: {err}")
+                except Exception:
+                    pass
+
+        # Keep command processing working
+        await self.process_commands(message)
+
+
+bot = InLatexDiscordBot()
+
+
+@bot.tree.command(name="start", description="Welcome and quick usage guide for Watashino LaTeX Bot")
+async def start_cmd(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    # Register known user
+    try:
+        _ = bot.um.getUser(user_id)
+    except Exception:
+        bot.um.setUser(user_id, {})
+    await interaction.response.defer(ephemeral=True)
+    guide = (
+        "Welcome to Watashino LaTeX Bot!\n\n"
+        "How to use:\n"
+        "- Use the slash command `/latex` with your code: e.g. `$x^2$`.\n"
+        "- Prefer a full-screen editor? Use `/overleaf` to open a modal and type LaTeX comfortably.\n"
+        "- Or just type LaTeX directly in chat/DMs: `$e^{i\\pi}+1=0$`.\n"
+        "- Display math: `\\[\\int_0^1 x^2\\,dx\\]`.\n"
+        "- Code fences: ```latex ... ``` will also render.\n\n"
+        "Tips:\n"
+        "- Open `/settings` to change DPI and edit your preamble.\n"
+        "- `/getmypreamble` and `/setcustompreamble` manage your LaTeX preamble.\n"
+        "- Need help with dependencies? Try `/diagnose`.\n"
+    )
+    await interaction.followup.send(guide, ephemeral=True)
+
+
+@bot.tree.command(name="latex", description="Render a LaTeX expression to image (and PDF)")
+@app_commands.describe(code="Your LaTeX expression. Use $...$ for math.")
+async def latex_cmd(interaction: discord.Interaction, code: str):
+    await interaction.response.defer(thinking=True)
+    user_id = interaction.user.id
+    session_id = f"{interaction.id}_{user_id}"
+    try:
+        image_stream, pdf_stream = bot.converter.convertExpression(code, user_id, session_id, returnPdf=True)
+        image_stream.seek(0)
+        pdf_stream.seek(0)
+        files = [
+            discord.File(fp=image_stream, filename="expression.png"),
+            discord.File(fp=pdf_stream, filename="expression.pdf")
+        ]
+        await interaction.followup.send(files=files)
+    except ValueError as err:
+        await interaction.followup.send(f"Syntax error or processing issue:\n{err}", ephemeral=True)
+    except Exception as err:
+        bot.logger.warn("Unhandled exception in /latex: %s", str(err))
+        await interaction.followup.send(f"Unexpected error during rendering.\n{type(err).__name__}: {err}", ephemeral=True)
+
+
+@bot.tree.command(name="settings", description="Open settings to configure caption, DPI and preamble")
+async def settings_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message("Adjust your preferences:", view=SettingsView(bot.uom, interaction.user.id, bot.pm, bot.rm), ephemeral=True)
+
+
+@bot.tree.command(name="sethtmlformat", description="Set your preferred HTML output format for /tex2html")
+@app_commands.describe(format="html5, html5+mathjax, xhtml, odt, epub")
+@app_commands.choices(format=[
+    app_commands.Choice(name="html5", value="html5"),
+    app_commands.Choice(name="html5+mathjax", value="html5+mathjax"),
+    app_commands.Choice(name="xhtml", value="xhtml"),
+    app_commands.Choice(name="odt", value="odt"),
+    app_commands.Choice(name="epub", value="epub"),
+])
+async def sethtmlformat_cmd(interaction: discord.Interaction, format: app_commands.Choice[str]):
+    bot.uom.setHtmlFormatOption(interaction.user.id, format.value)
+    await interaction.response.send_message(f"HTML format set to {format.value}.", ephemeral=True)
+
+
+@bot.tree.command(name="setdpi", description="Set image DPI (100-1000)")
+@app_commands.describe(dpi="DPI value between 100 and 1000")
+async def setdpi_cmd(interaction: discord.Interaction, dpi: int):
+    if dpi < 100 or dpi > 1000:
+        await interaction.response.send_message(bot.rm.getString("dpi_value_error"), ephemeral=True)
+        return
+    bot.uom.setDpiOption(interaction.user.id, dpi)
+    await interaction.response.send_message(bot.rm.getString("dpi_set") % dpi, ephemeral=True)
+
+
+@bot.tree.command(name="getmypreamble", description="Show your current preamble")
+async def getmypreamble_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        preamble = bot.pm.getPreambleFromDatabase(interaction.user.id)
+        await interaction.followup.send(bot.rm.getString("your_preamble_custom") + preamble, ephemeral=True)
+    except KeyError:
+        preamble = bot.pm.getDefaultPreamble()
+        await interaction.followup.send(bot.rm.getString("your_preamble_default") + preamble, ephemeral=True)
+
+
+@bot.tree.command(name="getdefaultpreamble", description="Show the default preamble")
+async def getdefaultpreamble_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message(bot.rm.getString("default_preamble") + bot.pm.getDefaultPreamble(), ephemeral=True)
+
+
+@bot.tree.command(name="setcustompreamble", description="Set your custom preamble (opens a modal)")
+async def setcustompreamble_cmd(interaction: discord.Interaction):
+    modal = PreambleModal(bot.pm, bot.rm, interaction.user.id)
+    await interaction.response.send_modal(modal)
+
+@bot.tree.command(name="overleaf", description="Open a modal to type LaTeX in a code-like editor and render it")
+async def overleaf_cmd(interaction: discord.Interaction):
+    modal = OverleafModal()
+    await interaction.response.send_modal(modal)
+
+
+@bot.tree.command(name="tex2html", description="Open a modal to convert LaTeX to an HTML website (TeX Live)")
+@app_commands.describe(format="HTML output format (make4ht -f)", make4ht_args="Advanced make4ht arguments (space-separated)")
+@app_commands.choices(format=[
+    app_commands.Choice(name="html5", value="html5"),
+    app_commands.Choice(name="html5+mathjax", value="html5+mathjax"),
+    app_commands.Choice(name="xhtml", value="xhtml"),
+    app_commands.Choice(name="odt", value="odt"),
+    app_commands.Choice(name="epub", value="epub"),
+])
+async def tex2html_cmd(interaction: discord.Interaction, format: app_commands.Choice[str] | None = None, make4ht_args: str | None = None):
+    # If no format provided, use user's preference; otherwise env default inside converter
+    chosen = format.value if format else bot.uom.getHtmlFormatOption(interaction.user.id)
+    # Parse args into list, very basic split; do not allow shell metacharacters
+    parsed_args = []
+    if make4ht_args:
+        # Basic sanitization: split on whitespace, drop dangerous tokens
+        banned = {"&&", "||", ";", "|", ">", "<", "$(", "`"}
+        toks = make4ht_args.strip().split()
+        parsed_args = [t for t in toks if t not in banned]
+    else:
+        # Use stored user preference if present
+        stored = bot.uom.getMake4htArgsOption(interaction.user.id)
+        if stored:
+            banned = {"&&", "||", ";", "|", ">", "<", "$(", "`"}
+            toks = stored.strip().split()
+            parsed_args = [t for t in toks if t not in banned]
+    modal = Tex2HtmlModal(html_format=chosen, make4ht_args=parsed_args)
+    await interaction.response.send_modal(modal)
+
+
+@bot.tree.command(name="gethtmlformat", description="Show your current HTML format preference")
+async def gethtmlformat_cmd(interaction: discord.Interaction):
+    fmt = bot.uom.getHtmlFormatOption(interaction.user.id)
+    await interaction.response.send_message(f"Your HTML format is set to: {fmt}", ephemeral=True)
+
+
+@bot.tree.command(name="getmake4htargs", description="Show your current make4ht arguments preference")
+async def getmake4htargs_cmd(interaction: discord.Interaction):
+    args = bot.uom.getMake4htArgsOption(interaction.user.id)
+    val = args if args else "(none)"
+    await interaction.response.send_message(f"Your make4ht args are: {val}", ephemeral=True)
+
+
+@bot.tree.command(name="setmake4htargs", description="Set your preferred make4ht arguments for /tex2html (space-separated)")
+@app_commands.describe(args="Example: -c my.cfg -d outdir")
+async def setmake4htargs_cmd(interaction: discord.Interaction, args: str):
+    # Store raw string; sanitization occurs on use
+    bot.uom.setMake4htArgsOption(interaction.user.id, args)
+    await interaction.response.send_message("Saved make4ht arguments.", ephemeral=True)
+
+
+def run():
+    token = os.environ.get("DISCORD_TOKEN")
+    if not token:
+        raise RuntimeError("Missing DISCORD_TOKEN environment variable")
+    bot.run(token)
+
+
+@bot.tree.command(name="diagnose", description="Check if pdflatex and Ghostscript are available on PATH")
+async def diagnose_cmd(interaction: discord.Interaction):
+    import shutil
+    await interaction.response.defer(ephemeral=True)
+    pdflatex_path = shutil.which("pdflatex")
+    gs_path = shutil.which("gs") or shutil.which("gswin64c") or shutil.which("gswin32c")
+    htlatex_path = shutil.which("htlatex")
+    make4ht_path = shutil.which("make4ht")
+    # Fallback: if htlatex is found, try same dir for make4ht
+    if not make4ht_path and htlatex_path:
+        try:
+            import os
+            base_dir = os.path.dirname(htlatex_path)
+            for cand in ("make4ht.exe", "make4ht.bat", "make4ht"):
+                candidate = os.path.join(base_dir, cand)
+                if os.path.exists(candidate):
+                    make4ht_path = candidate
+                    break
+        except Exception:
+            pass
+    lines = []
+    if pdflatex_path:
+        lines.append(f"pdflatex: found at {pdflatex_path}")
+    else:
+        lines.append("pdflatex: NOT FOUND — install TeX Live/MiKTeX and ensure it’s on PATH")
+    if gs_path:
+        lines.append(f"Ghostscript: found at {gs_path}")
+    else:
+        lines.append("Ghostscript: NOT FOUND — install Ghostscript and ensure 'gs', 'gswin64c' or 'gswin32c' is on PATH")
+    if htlatex_path:
+        lines.append(f"htlatex: found at {htlatex_path}")
+    else:
+        lines.append("htlatex: NOT FOUND — install TeX4ht tools and ensure 'htlatex' is on PATH")
+    if make4ht_path:
+        lines.append(f"make4ht: found at {make4ht_path}")
+    else:
+        lines.append("make4ht: NOT FOUND — install TeX Live 'make4ht' and ensure it is on PATH (or in the same folder as htlatex)")
+    # Show effective PATH prefix for troubleshooting
+    try:
+        import os
+        lines.append("PATH begins with: " + os.environ.get("PATH", "").split(os.pathsep)[0])
+    except Exception:
+        pass
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="resync", description="Force re-sync of application commands (global + optional guild)")
+async def resync_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    results = []
+    # Global sync
+    try:
+        global_cmds = await bot.tree.sync()
+        results.append(f"Global commands synced: {len(global_cmds)}")
+    except Exception as e:
+        results.append(f"Global sync failed: {type(e).__name__}: {e}")
+    # Guild sync if configured
+    guild_id = os.environ.get("DISCORD_GUILD_ID")
+    if guild_id and guild_id.isdigit():
+        try:
+            guild = discord.Object(id=int(guild_id))
+            try:
+                bot.tree.copy_global_to(guild=guild)
+            except Exception:
+                pass
+            guild_cmds = await bot.tree.sync(guild=guild)
+            results.append(f"Guild {guild_id} commands synced: {len(guild_cmds)}")
+        except Exception as e:
+            results.append(f"Guild sync failed for {guild_id}: {type(e).__name__}: {e}")
+    await interaction.followup.send("\n".join(results), ephemeral=True)
+
+
+if __name__ == "__main__":
+    run()
