@@ -37,6 +37,13 @@ class PreambleModal(discord.ui.Modal, title="Set Custom LaTeX Preamble"):
             await interaction.followup.send(msg, ephemeral=True)
 
 
+# If DISCORD_GUILD_ID is set, register commands as guild-scoped for instant sync
+_GUILD_ID_ENV = os.environ.get("DISCORD_GUILD_ID")
+_GUILD_OBJ = discord.Object(id=int(_GUILD_ID_ENV)) if _GUILD_ID_ENV and _GUILD_ID_ENV.isdigit() else None
+def _guild_scope_if_set(func):
+    return app_commands.guilds(_GUILD_OBJ)(func) if _GUILD_OBJ else func
+
+
 class SettingsView(discord.ui.View):
     def __init__(self, uom: UserOptionsManager, user_id: int, pm: Optional[PreambleManager] = None, rm: Optional[ResourceManager] = None):
         super().__init__(timeout=180)
@@ -534,6 +541,7 @@ async def diagnose_cmd(interaction: discord.Interaction):
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
+@_guild_scope_if_set
 @bot.tree.command(name="resync", description="Force re-sync of application commands (global + optional guild)")
 async def resync_cmd(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -562,6 +570,7 @@ async def resync_cmd(interaction: discord.Interaction):
 
 # --------------------- HTML Preview Management Commands ---------------------
 
+@_guild_scope_if_set
 @bot.tree.command(name="htmlpreviews", description="List currently hosted HTML previews")
 async def htmlpreviews_cmd(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -577,6 +586,7 @@ async def htmlpreviews_cmd(interaction: discord.Interaction):
     await interaction.followup.send("Hosted previews:\n" + "\n".join(lines), ephemeral=True)
 
 
+@_guild_scope_if_set
 @bot.tree.command(name="htmlkill", description="Terminate a specific hosted HTML preview by token")
 @app_commands.describe(token="The preview token from the URL (/site/<token>/)")
 async def htmlkill_cmd(interaction: discord.Interaction, token: str):
@@ -592,6 +602,7 @@ async def htmlkill_cmd(interaction: discord.Interaction, token: str):
         await interaction.followup.send(f"Token {token} not found.", ephemeral=True)
 
 
+@_guild_scope_if_set
 @bot.tree.command(name="htmlkillall", description="Terminate all hosted HTML previews")
 async def htmlkillall_cmd(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -605,6 +616,7 @@ async def htmlkillall_cmd(interaction: discord.Interaction):
 
 # --------------------- GitHub Deployment Command ---------------------
 
+@_guild_scope_if_set
 @bot.tree.command(name="deployhtml", description="Deploy last generated HTML site to GitHub Pages and return the URL")
 @app_commands.describe(slug="Optional folder name under the repo (defaults to timestamp)")
 async def deployhtml_cmd(interaction: discord.Interaction, slug: str | None = None):
