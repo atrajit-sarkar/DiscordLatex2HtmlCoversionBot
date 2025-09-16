@@ -373,20 +373,22 @@ class LatexConverter():
             if theme == "dark":
                 custom_css = (
                     ":root{color-scheme:dark;}\n"
-                    "html,body{background:#0b0c10;color:#e5e7eb;}\n"
-                    "a{color:#93c5fd;}\n"
-                    "pre,code{background:#111827;color:#e5e7eb;}\n"
-                    "table{border-color:#374151;}\n"
-                    "img{background:transparent;}\n"
+                    "body{background:#0b0c10 !important;color:#e5e7eb !important;}\n"
+                    "html{background:#0b0c10 !important;}\n"
+                    "a{color:#93c5fd !important;}\n"
+                    "pre,code{background:#111827 !important;color:#e5e7eb !important;}\n"
+                    "table{border-color:#374151 !important;}\n"
+                    "img{background:transparent !important;}\n"
                 )
             else:  # light
                 custom_css = (
                     ":root{color-scheme:light;}\n"
-                    "html,body{background:#ffffff;color:#111827;}\n"
-                    "a{color:#1d4ed8;}\n"
-                    "pre,code{background:#f3f4f6;color:#111827;}\n"
-                    "table{border-color:#e5e7eb;}\n"
-                    "img{background:transparent;}\n"
+                    "body{background:#ffffff !important;color:#111827 !important;}\n"
+                    "html{background:#ffffff !important;}\n"
+                    "a{color:#1d4ed8 !important;}\n"
+                    "pre,code{background:#f3f4f6 !important;color:#111827 !important;}\n"
+                    "table{border-color:#e5e7eb !important;}\n"
+                    "img{background:transparent !important;}\n"
                 )
 
         style_tag = (
@@ -397,7 +399,26 @@ class LatexConverter():
         try:
             with open(html_path, "r", encoding="utf-8", errors="ignore") as f:
                 html = f.read()
-            # Insert before </head> if present; otherwise prepend
+            # Add a body class to increase selector specificity, then insert before </head>
+            lower = html.lower()
+            idx = lower.rfind("</head>")
+            # Ensure body has an override class for more specificity
+            body_class = "inlatexbot-dark" if theme == "dark" else "inlatexbot-light"
+            if "<body" in lower:
+                # Naive injection of class attribute (safe for TeX4ht simple bodies)
+                def _inject_class(tag: str, klass: str, s: str) -> str:
+                    i = s.lower().find("<body")
+                    if i == -1:
+                        return s
+                    j = s.find('>', i)
+                    if j == -1:
+                        return s
+                    head = s[i:j]
+                    if "class=" in head.lower():
+                        return s  # don’t overwrite existing classes to avoid breakage
+                    new_head = head + f' class="{klass}"'
+                    return s[:i] + new_head + s[j:]
+                html = _inject_class("body", body_class, html)
             lower = html.lower()
             idx = lower.rfind("</head>")
             if idx != -1:
