@@ -2,6 +2,7 @@ import asyncio
 import os
 import time
 import uuid
+import socket
 from typing import Dict, Tuple, Optional
 
 from aiohttp import web
@@ -19,7 +20,34 @@ class HtmlHost:
     def __init__(self, host: str = "0.0.0.0", port: int = 8080, base_url: Optional[str] = None):
         self._host = host
         self._port = port
-        self._base_url = base_url or f"http://localhost:{port}"
+        # Determine a sensible public-facing base URL for links
+        if base_url:
+            self._base_url = base_url.rstrip("/")
+        else:
+            # Prefer environment override if present
+            env_base = os.environ.get("HTML_BASE_URL")
+            if env_base:
+                self._base_url = env_base.rstrip("/")
+            else:
+                host_for_link = host
+                # Avoid 0.0.0.0/:: in links; try to pick a concrete IP
+                if host in ("0.0.0.0", "::"):
+                    # Allow explicit public host via env
+                    public_host = os.environ.get("HTML_PUBLIC_HOST") or os.environ.get("PUBLIC_HOST")
+                    if public_host:
+                        host_for_link = public_host
+                    else:
+                        # Best-effort: detect outbound interface IP (may be private on cloud VMs)
+                        try:
+                            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                            s.connect(("8.8.8.8", 80))
+                            host_for_link = s.getsockname()[0]
+                            s.close()
+                        except Exception:
+                            host_for_link = "localhost"
+                if not host_for_link:
+                    host_for_link = "localhost"
+                self._base_url = f"http://{host_for_link}:{port}"
         self._app: Optional[web.Application] = None
         self._runner: Optional[web.AppRunner] = None
         self._site: Optional[web.TCPSite] = None
