@@ -68,19 +68,23 @@ class LatexConverter():
         
     def pdflatex(self, fileName):
         try:
+            # Allow engine override via env for better UTF-8 handling (e.g., lualatex)
+            engine = os.environ.get("LATEXBOT_TEX_ENGINE", "pdflatex")
+            timeout = int(os.environ.get("LATEXBOT_PDFLATEX_TIMEOUT", "15"))
             check_output([
-                'pdflatex',
+                engine,
                 '-interaction=nonstopmode',
                 '-output-directory', 'build',
                 fileName
-            ], stderr=STDOUT, timeout=5)
+            ], stderr=STDOUT, timeout=timeout)
         except CalledProcessError:
-            with open(fileName[:-3] + "log", "r") as f:
+            # Read log with tolerant decoding to surface useful error text
+            with open(fileName[:-3] + "log", "r", encoding="utf-8", errors="ignore") as f:
                 msg = self.getError(f.readlines())
                 self.logger.debug(msg)
             raise ValueError(msg)
         except TimeoutExpired:
-            msg = "Pdflatex has likely hung up and had to be killed. Congratulations!"
+            msg = "LaTeX engine timed out while compiling PDF. Try simplifying the input or increase LATEXBOT_PDFLATEX_TIMEOUT."
             raise ValueError(msg)
     
     def cropPdf(self, sessionId): # TODO: this is intersecting with the png part
@@ -150,10 +154,15 @@ class LatexConverter():
                 self.logger.debug("Preamble for userId %d not found, using default preamble", userId)
                 preamble = self._preambleManager.getDefaultPreamble()
             finally:
+                # Ensure UTF-8 support if user preamble lacks it
+                needs_utf8 = ("inputenc" not in preamble) and ("fontspec" not in preamble)
+                if needs_utf8 and ("usepackage[T1]{fontenc}" not in preamble):
+                    preamble = preamble + "\n\\usepackage[utf8]{inputenc}"
                 fileString = preamble+"\n\\begin{document}\n"+expression+"\n\\end{document}"
 
         os.makedirs("build", exist_ok=True)
-        with open("build/expression_file_%s.tex"%sessionId, "w+") as f:
+        # Always write LaTeX in UTF-8 to avoid inputenc errors with smart quotes, emojis, etc.
+        with open("build/expression_file_%s.tex"%sessionId, "w+", encoding="utf-8") as f:
             f.write(fileString)
         
         dpi = self._userOptionsManager.getDpiOption(userId)
