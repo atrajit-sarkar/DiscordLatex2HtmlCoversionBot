@@ -36,7 +36,8 @@ class GitHubDeployer:
         }
 
     def _get_sha_if_exists(self, repo_path: str) -> Optional[str]:
-        url = self._api(f"/repos/{self._owner}/{self._repo}/contents/{urllib.parse.quote(repo_path)}?ref={self._branch}")
+        # Preserve path separators; GitHub expects slashes in the path portion
+        url = self._api(f"/repos/{self._owner}/{self._repo}/contents/{urllib.parse.quote(repo_path, safe='/')}?ref={self._branch}")
         req = urllib.request.Request(url, headers=self._headers())
         try:
             with urllib.request.urlopen(req) as resp:
@@ -46,12 +47,18 @@ class GitHubDeployer:
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None
-            raise
+            # Surface error body for easier debugging
+            try:
+                body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
+            raise urllib.error.HTTPError(e.url, e.code, f"{e.reason} — {body}", e.hdrs, None)
         return None
 
     def _put_file(self, repo_path: str, content_bytes: bytes, message: str):
         sha = self._get_sha_if_exists(repo_path)
-        url = self._api(f"/repos/{self._owner}/{self._repo}/contents/{urllib.parse.quote(repo_path)}")
+        # Preserve path separators; GitHub expects slashes in the path portion
+        url = self._api(f"/repos/{self._owner}/{self._repo}/contents/{urllib.parse.quote(repo_path, safe='/')}")
         payload = {
             "message": message,
             "content": base64.b64encode(content_bytes).decode("ascii"),
@@ -61,13 +68,35 @@ class GitHubDeployer:
             payload["sha"] = sha
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers={**self._headers(), "Content-Type": "application/json"}, method="PUT")
-        with urllib.request.urlopen(req) as resp:
-            # We ignore body except for errors
-            resp.read()
+        try:
+            with urllib.request.urlopen(req) as resp:
+                # We ignore body except for errors
+                resp.read()
+        except urllib.error.HTTPError as e:
+            # Include response body in error for diagnostics (e.g., missing branch, permissions)
+            try:
+                body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
+            raise urllib.error.HTTPError(e.url, e.code, f"{e.reason} — {body}", e.hdrs, None)
+
+    def _branch_exists(self) -> bool:
+        url = self._api(f"/repos/{self._owner}/{self._repo}/branches/{urllib.parse.quote(self._branch, safe='')}")
+        req = urllib.request.Request(url, headers=self._headers())
+        try:
+            with urllib.request.urlopen(req):
+                return True
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return False
+            return False
 
     def deploy_dir(self, local_dir: str, dest_slug: Optional[str] = None) -> str:
         if not os.path.isdir(local_dir):
             raise ValueError(f"Local directory not found: {local_dir}")
+        # Preflight branch check for clearer errors than a later 404
+        if not self._branch_exists():
+            raise RuntimeError(f"Branch '{self._branch}' not found in {self._owner}/{self._repo}. Create it or set GITHUB_BRANCH.")
         slug = dest_slug or time.strftime("site-%Y%m%d-%H%M%S")
         root_parts = [p for p in [self._dir_prefix, slug] if p]
         root_repo_path = "/".join(root_parts)
