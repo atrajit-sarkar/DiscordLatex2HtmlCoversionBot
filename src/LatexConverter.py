@@ -342,6 +342,74 @@ class LatexConverter():
         except TimeoutExpired:
             raise ValueError("htlatex/make4ht timed out while converting to HTML.")
 
+    def _maybe_inject_theme(self, html_path: str, base_fmt: str | None = None):
+        """Optionally inject a dark/light theme CSS into the generated HTML.
+
+        Controlled by env:
+        - LATEXBOT_HTML_THEME=dark|light|system (default: system → no forced override)
+        - LATEXBOT_HTML_THEME_CSS=path/to/custom.css (optional, overrides built-in CSS)
+        """
+        try:
+            theme = os.environ.get("LATEXBOT_HTML_THEME", "system").strip().lower()
+        except Exception:
+            theme = "system"
+        if theme not in ("dark", "light"):
+            return  # no override requested
+        # Only inject for HTML outputs
+        if not html_path.lower().endswith(".html"):
+            return
+
+        custom_css = None
+        css_path = os.environ.get("LATEXBOT_HTML_THEME_CSS")
+        if css_path and os.path.isfile(css_path):
+            try:
+                with open(css_path, "r", encoding="utf-8", errors="ignore") as f:
+                    custom_css = f.read()
+            except Exception:
+                custom_css = None
+
+        # Built-in minimal dark/light overrides
+        if not custom_css:
+            if theme == "dark":
+                custom_css = (
+                    ":root{color-scheme:dark;}\n"
+                    "html,body{background:#0b0c10;color:#e5e7eb;}\n"
+                    "a{color:#93c5fd;}\n"
+                    "pre,code{background:#111827;color:#e5e7eb;}\n"
+                    "table{border-color:#374151;}\n"
+                    "img{background:transparent;}\n"
+                )
+            else:  # light
+                custom_css = (
+                    ":root{color-scheme:light;}\n"
+                    "html,body{background:#ffffff;color:#111827;}\n"
+                    "a{color:#1d4ed8;}\n"
+                    "pre,code{background:#f3f4f6;color:#111827;}\n"
+                    "table{border-color:#e5e7eb;}\n"
+                    "img{background:transparent;}\n"
+                )
+
+        style_tag = (
+            "<!-- injected by InLaTeX bot: theme override -->\n"
+            "<style id=\"inlatexbot-theme\">\n" + custom_css + "\n</style>\n"
+        )
+
+        try:
+            with open(html_path, "r", encoding="utf-8", errors="ignore") as f:
+                html = f.read()
+            # Insert before </head> if present; otherwise prepend
+            lower = html.lower()
+            idx = lower.rfind("</head>")
+            if idx != -1:
+                new_html = html[:idx] + style_tag + html[idx:]
+            else:
+                new_html = style_tag + html
+            with open(html_path, "w", encoding="utf-8", errors="ignore") as f:
+                f.write(new_html)
+        except Exception:
+            # Non-fatal if injection fails
+            pass
+
     def convertToHtml(self, expression: str, userId: int, sessionId: str, html_format: str | None = None, make4ht_args: list[str] | None = None):
         """Convert LaTeX input to an HTML website using TeX Live (htlatex/make4ht).
 
@@ -393,6 +461,12 @@ class LatexConverter():
                             dst.write(src.read())
                     except Exception:
                         index_html = produced_html  # keep original name
+
+            # Optionally inject a theme override (dark/light)
+            try:
+                self._maybe_inject_theme(index_html)
+            except Exception:
+                pass
 
             # Package directory into a ZIP in-memory
             import zipfile, io as _io
