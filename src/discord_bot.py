@@ -14,6 +14,7 @@ from src.UserOptionsManager import UserOptionsManager
 from src.UsersManager import UsersManager
 from src.LoggingServer import LoggingServer
 from src.HtmlHost import HtmlHost
+from src.GitHubDeployer import GitHubDeployer
 
 
 class PreambleModal(discord.ui.Modal, title="Set Custom LaTeX Preamble"):
@@ -559,10 +560,6 @@ async def resync_cmd(interaction: discord.Interaction):
     await interaction.followup.send("\n".join(results), ephemeral=True)
 
 
-if __name__ == "__main__":
-    run()
-
-
 # --------------------- HTML Preview Management Commands ---------------------
 
 @bot.tree.command(name="htmlpreviews", description="List currently hosted HTML previews")
@@ -604,3 +601,46 @@ async def htmlkillall_cmd(interaction: discord.Interaction):
         return
     count = host.unregister_all(delete_dirs=True)
     await interaction.followup.send(f"Terminated {count} previews and deleted their directories.", ephemeral=True)
+
+
+# --------------------- GitHub Deployment Command ---------------------
+
+@bot.tree.command(name="deployhtml", description="Deploy last generated HTML site to GitHub Pages and return the URL")
+@app_commands.describe(slug="Optional folder name under the repo (defaults to timestamp)")
+async def deployhtml_cmd(interaction: discord.Interaction, slug: str | None = None):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        # Identify last session folder; prefer a message-local heuristic using interaction id
+        user_id = interaction.user.id
+        session_id = f"{interaction.id}_{user_id}"
+        workdir = os.path.join("build", f"html_{session_id}")
+        # If that specific folder doesn't exist, fall back to newest html_* folder
+        if not os.path.isdir(workdir):
+            import glob
+            candidates = sorted(glob.glob(os.path.join("build", "html_*")), key=os.path.getmtime, reverse=True)
+            workdir = candidates[0] if candidates else None
+        if not workdir or not os.path.isdir(workdir):
+            await interaction.followup.send("No generated HTML site found. Run /tex2html first.", ephemeral=True)
+            return
+
+        # Read env without altering existing variable names or values
+        token = os.environ.get("GITHUB_PAT") or os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        owner = os.environ.get("GITHUB_OWNER")
+        repo = os.environ.get("GITHUB_REPO")
+        branch = os.environ.get("GITHUB_BRANCH", "gh-pages")
+        dir_prefix = os.environ.get("GITHUB_DIR_PREFIX", "")
+        pages_base = os.environ.get("GITHUB_PAGES_BASE_URL")
+        if not token or not owner or not repo:
+            await interaction.followup.send("Missing GitHub configuration. Set GITHUB_PAT (or GH_TOKEN), GITHUB_OWNER, GITHUB_REPO in .env.", ephemeral=True)
+            return
+
+        deployer = GitHubDeployer(token=token, owner=owner, repo=repo, branch=branch, dir_prefix=dir_prefix)
+        slug_used = deployer.deploy_dir(workdir, dest_slug=slug)
+        url = GitHubDeployer.compute_pages_url(owner, repo, pages_base, slug_used)
+        await interaction.followup.send(f"Deployed to GitHub: {url}", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"GitHub deployment failed: {type(e).__name__}: {e}", ephemeral=True)
+
+
+if __name__ == "__main__":
+    run()

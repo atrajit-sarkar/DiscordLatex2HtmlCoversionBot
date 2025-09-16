@@ -51,6 +51,7 @@ Slash commands:
 - `/latex code:"$x^2$"` — render to PNG and PDF
 - `/overleaf` — open a modal with a large code editor-style input to write LaTeX and render
 - `/tex2html` — open a modal that converts LaTeX to an HTML website using TeX Live (htlatex); optional `format` choice (e.g., `html5`, `html5+mathjax`, `xhtml`, `odt`, `epub`)
+- `/deployhtml` — deploy the last generated HTML site to a GitHub repository (Pages) and return the URL
 - `/settings` — configure caption, DPI, and edit preamble
 - `/sethtmlformat` — set your preferred HTML format for `/tex2html`
 - `/setdpi 300` — set rendering DPI (100-1000)
@@ -93,6 +94,30 @@ Use `/tex2html` to generate a small website from your LaTeX:
 - Output format can be selected via the command option or environment variable `LATEXBOT_HTML_FORMAT` (default `html5`). Supported: `html5`, `html5+mathjax`, `xhtml`, `odt`, `epub`.
 - Advanced users: pass extra `make4ht` arguments via the `make4ht_args` text option on `/tex2html`. Example: `-c config.cfg -d outdir`. Note: arguments are space-split and lightly sanitized.
 - Returns a ZIP file; unzip and open `index.html`
+### Deploy the generated HTML to GitHub Pages
+
+- After you run `/tex2html`, use `/deployhtml` to push the generated site to a GitHub repository/branch. It returns the GitHub Pages URL to click.
+- This uses the GitHub Contents API and uploads each file; intended for small static sites.
+
+Required environment variables (add to `.env`):
+
+- `GITHUB_PAT` — your GitHub Personal Access Token (alternatively `GH_TOKEN` or `GITHUB_TOKEN`)
+- `GITHUB_OWNER` — owner/org name (e.g., `yourname`)
+- `GITHUB_REPO` — repository name (e.g., `yourrepo`)
+- `GITHUB_BRANCH` — target branch (default `gh-pages`)
+- `GITHUB_DIR_PREFIX` — optional path prefix inside the repo (e.g., `sites`)
+- `GITHUB_PAGES_BASE_URL` — optional base URL if you use a custom domain or different Pages base
+
+Recommended PAT scopes:
+
+- If the repo is public: `repo:status`, `public_repo`, `contents:write`
+- If the repo is private: `repo` (full) or at minimum `contents:write` on the selected repo
+
+Notes:
+
+- Ensure the repository has GitHub Pages enabled on the selected branch (e.g., `gh-pages` → “Build and deployment: Deploy from a branch”).
+- The deployed site is placed under an auto-generated slug (timestamp) by default; you can pass a `slug` argument to `/deployhtml` to control the directory name.
+- The returned URL defaults to `https://<owner>.github.io/<repo>/<slug>/`, or uses `GITHUB_PAGES_BASE_URL` if set.
 
 Previews (optional):
 
