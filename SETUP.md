@@ -81,7 +81,7 @@ python3 --version  # Should be 3.10+ (Ubuntu 22.04 default)
 pip3 --version
 ```
 
-### Step 3: Install LaTeX Distribution
+### Step 3: Install LaTeX Distribution (with TeX4ht and dvisvgm)
 
 ```bash
 # Install TeX Live (comprehensive LaTeX distribution)
@@ -91,8 +91,11 @@ sudo apt install -y texlive-full
 # Alternative minimal install (if storage is limited):
 # sudo apt install -y texlive-latex-base texlive-latex-extra texlive-fonts-recommended
 
-# Verify pdflatex installation
+# Verify key LaTeX tools
 pdflatex --version
+htlatex --version       # TeX4ht driver (should exist)
+make4ht --version       # Preferred TeX4ht wrapper (should exist)
+dvisvgm --version       # For SVG/TikZ outputs in HTML
 ```
 
 ### Step 4: Install Ghostscript
@@ -149,7 +152,7 @@ cp .env.example .env
 nano .env
 ```
 
-**Configure your `.env` file:**
+**Configure your `.env` file (minimum):**
 ```bash
 # Discord Bot Configuration
 DISCORD_TOKEN=your_bot_token_here
@@ -163,18 +166,40 @@ LATEXBOT_PDF_MARGIN_PT=24
 
 # Optional: Transparent PNG rendering
 LATEXBOT_TRANSPARENT=false
+
+# Optional: Prefer a specific TeX engine for PDF path
+# LATEXBOT_TEX_ENGINE=lualatex
+
+# Optional: Increase timeouts for long compiles (seconds)
+# LATEXBOT_PDFLATEX_TIMEOUT=90
+# LATEXBOT_HTML_TIMEOUT=180
+
+# Optional (Windows): If TeX binaries aren’t on PATH, prepend them
+# LATEXBIN_DIRS=C:\\texlive\\2024\\bin\\windows;C:\\Program Files\\MiKTeX\\miktex\\bin\\x64
+
+# HTML Preview Server (optional)
+# HTML_HOST=0.0.0.0
+# HTML_PORT=8088
+# HTML_BASE_URL=https://your-public-hostname-or-tunnel
+
+# GitHub Pages Deployment (optional, for /deployhtml)
+# GITHUB_PAT=ghp_your_pat_here
+# GITHUB_OWNER=your-github-username-or-org
+# GITHUB_REPO=your-repo
+# GITHUB_BRANCH=gh-pages
+# GITHUB_DIR_PREFIX=sites
+# GITHUB_PAGES_BASE_URL=https://yourname.github.io/your-repo
 ```
 
 ### Step 4: Test Installation
 
 ```bash
-# Run diagnostic check
+# Start the bot
 python main.py
 
-# You should see:
-# - Bot login confirmation
-# - No dependency errors
-# - "Bot is ready!" message
+# In Discord, run:
+# /start      (welcome)
+# /diagnose   (lists detected pdflatex/ghostscript/htlatex/make4ht/dvisvgm)
 ```
 
 ---
@@ -302,10 +327,28 @@ server {
 ```
 
 ### Step 3: Enable Site
+## 🌐 Part 5b: Built‑in Preview Server (Optional)
+
+The bot can host temporary previews of generated HTML sites via an internal server (aiohttp).
+
+Configure with environment variables in `.env`:
+
+```bash
+# Bind address (127.0.0.1 for local only, 0.0.0.0 for remote access)
 
 ```bash
 # Enable site
 sudo ln -s /etc/nginx/sites-available/watashino-latex-bot /etc/nginx/sites-enabled/
+
+```
+
+Usage inside Discord:
+- Run `/tex2html` → the reply includes a “Preview URL” if the host is running
+- Manage previews: `/htmlpreviews`, `/htmlkill token:<token>`, `/htmlkillall`
+
+Notes:
+- If `HTML_HOST=127.0.0.1`, preview links only work from the same machine.
+- Set `HTML_HOST=0.0.0.0` and a proper `HTML_BASE_URL` to access from elsewhere.
 
 # Test configuration
 sudo nginx -t
@@ -429,6 +472,8 @@ sudo ufw status         # Firewall status
 |-------|---------|----------|
 | **Bot Won't Start** | Service fails immediately | Check `.env` file, verify Discord token |
 | **LaTeX Errors** | "pdflatex not found" | Reinstall texlive: `sudo apt install texlive-full` |
+| **HTML tools missing** | `make4ht`/`htlatex`/`dvisvgm` not found | Install TeX4ht + dvisvgm (included in `texlive-full`), then check `/diagnose` |
+| **GitHub deployment 404** | `/deployhtml` fails with 404 | Ensure `GITHUB_OWNER/REPO` are correct, PAT has `contents:write`, and `GITHUB_BRANCH` exists (e.g., create `gh-pages`) |
 | **Memory Issues** | Bot crashes randomly | Upgrade to larger instance type |
 | **Permission Errors** | File access denied | Fix ownership: `sudo chown -R ubuntu:ubuntu ~/InLaTeXbot` |
 | **Network Issues** | Bot disconnects frequently | Check security groups, verify internet connectivity |
@@ -480,7 +525,47 @@ https://discord.com/api/oauth2/authorize?client_id=YOUR_BOT_ID&permissions=27487
 
 ---
 
-## 📈 Part 9: Scaling & Advanced Features
+## � Part 9: GitHub Pages Deployment (Optional)
+
+You can deploy generated HTML sites to GitHub Pages using the `/deployhtml` command.
+
+1) Prepare repository and branch
+
+```bash
+# In your repo, ensure a Pages-enabled branch exists (e.g., gh-pages)
+# If not present, create it and push at least one commit, then enable Pages
+```
+
+2) Create a Personal Access Token (classic or fine-grained)
+
+- Public repo: `public_repo` and `contents:write`
+- Private repo: `repo` (or `contents:write` with access to the repo)
+
+3) Configure `.env`
+
+```bash
+GITHUB_PAT=ghp_your_pat
+GITHUB_OWNER=your-github-username-or-org
+GITHUB_REPO=your-repo
+GITHUB_BRANCH=gh-pages         # or main (if Pages is configured from main)
+# Optional: upload under a subfolder
+GITHUB_DIR_PREFIX=sites
+# Optional: override computed URL (custom domain or different base)
+# GITHUB_PAGES_BASE_URL=https://yourname.github.io/your-repo
+```
+
+4) Test and deploy
+
+- Run `/tex2html` in Discord to generate a site
+- Run `/deployhtml` (or `/deployhtml slug:my-folder`)
+- The bot replies with a Pages URL
+
+Troubleshooting:
+- If you see 404 errors, ensure the branch exists and the token has access. The bot now includes GitHub’s error body for clarity.
+
+---
+
+## �📈 Part 10: Scaling & Advanced Features
 
 ### Auto Scaling Setup
 
@@ -550,6 +635,46 @@ Your Watashino LaTeX Bot is now running 24/7 on AWS EC2! 🚀
 - 🔧 **Troubleshooting**: Review logs with `journalctl` commands above
 
 ---
+
+## 💻 Windows (PowerShell) Quickstart
+
+1) Install prerequisites
+
+- Python 3.11+
+- TeX Live or MiKTeX
+    - TeX Live typical bin: `C:\texlive\2024\bin\windows`
+    - MiKTeX typical bin: `C:\Program Files\MiKTeX\miktex\bin\x64`
+- Ghostscript
+    - `gswin64c.exe` on PATH
+
+2) Clone and install
+
+```powershell
+pip install -r requirements.txt
+```
+
+3) Configure `.env`
+
+```powershell
+# Minimal
+DISCORD_TOKEN=your_bot_token
+DISCORD_GUILD_ID=your_test_guild_id
+
+# Ensure TeX tools are found (prepend paths)
+LATEXBIN_DIRS=C:\\texlive\\2024\\bin\\windows;C:\\Program Files\\MiKTeX\\miktex\\bin\\x64
+
+# Optional: preview hosting
+# HTML_HOST=127.0.0.1
+# HTML_PORT=8088
+```
+
+4) Run the bot
+
+```powershell
+python .\main.py
+```
+
+5) In Discord, use `/diagnose` to confirm detection of `pdflatex`, `gs`, `htlatex`/`make4ht`, and `dvisvgm`.
 
 > **💡 Pro Tip**: Bookmark this guide and keep your EC2 instance information handy. Consider setting up CloudWatch alerts for advanced monitoring!
 
