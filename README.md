@@ -94,23 +94,27 @@ Use `/tex2html` to generate a small website from your LaTeX:
 - Advanced users: pass extra `make4ht` arguments via the `make4ht_args` text option on `/tex2html`. Example: `-c config.cfg -d outdir`. Note: arguments are space-split and lightly sanitized.
 - Returns a ZIP file; unzip and open `index.html`
 
-Temporary previews (optional):
+Previews (optional):
 
-- The bot can also serve a temporary preview URL for your generated site, so you can click and view without downloading the ZIP.
-- An internal aiohttp web server is started automatically on startup; if running, `/tex2html` replies will include a “Temporary preview” link that expires after a configured TTL (default 60 minutes).
+- The bot can serve a preview URL for your generated site, so you can click and view without downloading the ZIP.
+- An internal aiohttp web server is started automatically on startup; if running, `/tex2html` replies include a “Preview URL” link.
 - The preview is served from a tokenized URL like `http://HOST:PORT/site/<token>/` that maps to the conversion’s output directory.
+
+Manage previews with slash commands:
+
+- `/htmlpreviews` — list all tokens and their directories
+- `/htmlkill token:<token>` — terminate a specific preview and delete its directory
+- `/htmlkillall` — terminate all previews and delete their directories
 
 Configure preview hosting via environment variables:
 
 - `HTML_HOST` — bind address for the preview server (default `127.0.0.1`). Set `0.0.0.0` to listen on all interfaces.
 - `HTML_PORT` — port for the preview server (default `8088`).
 - `HTML_BASE_URL` — public base URL used in links (defaults to `http://{HTML_HOST}:{HTML_PORT}`). If you run behind a reverse proxy or tunnel, set this to the externally reachable URL.
-- `HTML_TTL_SECONDS` — how long previews live before being cleaned up (default `3600`).
 
 Notes:
 
 - If `HTML_HOST` is left as `127.0.0.1`, the preview link will only work from the same machine the bot runs on. For remote access, bind to `0.0.0.0` and set `HTML_BASE_URL` to your public URL.
-- The server cleans up expired preview directories automatically.
 
 Additional prerequisites for this feature:
 - TeX Live installed with TeX4ht components (`htlatex` or `make4ht`) available on PATH

@@ -157,16 +157,15 @@ class Tex2HtmlModal(discord.ui.Modal, title="LaTeX → HTML Converter"):
             preview = None
             if getattr(bot, "html_host", None) and bot.html_host and bot.html_host.is_running():
                 try:
-                    ttl = int(os.environ.get("HTML_TTL_SECONDS", "3600"))
                     workdir = os.path.join("build", f"html_{session_id}")
                     if os.path.isdir(workdir):
-                        preview = bot.html_host.register_dir(workdir, ttl_seconds=ttl)
+                        preview = bot.html_host.register_dir(workdir)
                 except Exception as e:
                     self.logger.warn("Failed to register HTML preview: %s", e)
                     preview = None
             content_msg = "Here is your website as a ZIP (extract and open index.html)."
             if preview:
-                content_msg += f"\nTemporary preview: {preview} (expires in ~{int(os.environ.get('HTML_TTL_SECONDS', '3600'))//60} minutes)"
+                content_msg += f"\nPreview URL: {preview}"
             await interaction.followup.send(content=content_msg, file=file)
         except ValueError as err:
             await interaction.followup.send(f"Conversion error:\n{err}", ephemeral=True)
@@ -562,3 +561,46 @@ async def resync_cmd(interaction: discord.Interaction):
 
 if __name__ == "__main__":
     run()
+
+
+# --------------------- HTML Preview Management Commands ---------------------
+
+@bot.tree.command(name="htmlpreviews", description="List currently hosted HTML previews")
+async def htmlpreviews_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    host = getattr(bot, "html_host", None)
+    if not host or not host.is_running():
+        await interaction.followup.send("HtmlHost is not running.", ephemeral=True)
+        return
+    items = host.list_previews()
+    if not items:
+        await interaction.followup.send("No previews are currently hosted.", ephemeral=True)
+        return
+    lines = [f"{token} -> {path}" for token, path in items.items()]
+    await interaction.followup.send("Hosted previews:\n" + "\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="htmlkill", description="Terminate a specific hosted HTML preview by token")
+@app_commands.describe(token="The preview token from the URL (/site/<token>/)")
+async def htmlkill_cmd(interaction: discord.Interaction, token: str):
+    await interaction.response.defer(ephemeral=True)
+    host = getattr(bot, "html_host", None)
+    if not host or not host.is_running():
+        await interaction.followup.send("HtmlHost is not running.", ephemeral=True)
+        return
+    ok = host.unregister(token, delete_dir=True)
+    if ok:
+        await interaction.followup.send(f"Preview {token} terminated and directory deleted.", ephemeral=True)
+    else:
+        await interaction.followup.send(f"Token {token} not found.", ephemeral=True)
+
+
+@bot.tree.command(name="htmlkillall", description="Terminate all hosted HTML previews")
+async def htmlkillall_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    host = getattr(bot, "html_host", None)
+    if not host or not host.is_running():
+        await interaction.followup.send("HtmlHost is not running.", ephemeral=True)
+        return
+    count = host.unregister_all(delete_dirs=True)
+    await interaction.followup.send(f"Terminated {count} previews and deleted their directories.", ephemeral=True)

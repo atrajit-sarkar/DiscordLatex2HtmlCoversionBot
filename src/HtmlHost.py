@@ -11,21 +11,20 @@ class HtmlHost:
     """Lightweight temporary static host for generated HTML sites.
 
     - Start an aiohttp server on a configured host/port.
-    - Register a directory with a TTL to get a tokenized URL.
+    - Register a directory to get a tokenized URL.
     - Serves files under /site/{token}/... with index.html fallback.
-    - Periodically cleans expired registrations and optionally deletes dirs.
+    - No automatic expiration; manual management via list/unregister/unregister_all.
     """
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8080, base_url: Optional[str] = None, delete_on_expire: bool = True):
+    def __init__(self, host: str = "0.0.0.0", port: int = 8080, base_url: Optional[str] = None):
         self._host = host
         self._port = port
         self._base_url = base_url or f"http://localhost:{port}"
-        self._delete_on_expire = delete_on_expire
         self._app: Optional[web.Application] = None
         self._runner: Optional[web.AppRunner] = None
         self._site: Optional[web.TCPSite] = None
-        self._map: Dict[str, Tuple[str, float]] = {}
-        self._cleanup_task: Optional[asyncio.Task] = None
+        # token -> directory path
+        self._map: Dict[str, str] = {}
 
     @property
     def base_url(self) -> str:
@@ -47,13 +46,8 @@ class HtmlHost:
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, self._host, self._port)
         await self._site.start()
-        # Periodic cleanup every 5 minutes
-        self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
 
     async def stop(self):
-        if self._cleanup_task:
-            self._cleanup_task.cancel()
-            self._cleanup_task = None
         if self._site:
             await self._site.stop()
             self._site = None
@@ -61,32 +55,41 @@ class HtmlHost:
             await self._runner.cleanup()
             self._runner = None
         self._app = None
-
-    async def _periodic_cleanup(self):
-        try:
-            while True:
-                await asyncio.sleep(300)
-                self.cleanup_expired()
-        except asyncio.CancelledError:
-            return
-
-    def cleanup_expired(self):
-        now = time.time()
-        to_delete = [t for t, (_, exp) in self._map.items() if exp <= now]
-        for token in to_delete:
-            path, _ = self._map.pop(token, (None, None))
-            if self._delete_on_expire and path and os.path.isdir(path):
-                try:
-                    import shutil
-                    shutil.rmtree(path, ignore_errors=True)
-                except Exception:
-                    pass
-
-    def register_dir(self, dir_path: str, ttl_seconds: int = 3600) -> str:
+    def register_dir(self, dir_path: str) -> str:
         token = uuid.uuid4().hex
-        expire_at = time.time() + max(60, ttl_seconds)
-        self._map[token] = (os.path.abspath(dir_path), expire_at)
+        self._map[token] = os.path.abspath(dir_path)
         return f"{self._base_url}/site/{token}/"
+
+    def list_previews(self) -> Dict[str, str]:
+        """Return a mapping of token -> directory path for all registered sites."""
+        return dict(self._map)
+
+    def unregister(self, token: str, delete_dir: bool = False) -> bool:
+        """Unregister a single token, optionally deleting the directory."""
+        path = self._map.pop(token, None)
+        if not path:
+            return False
+        if delete_dir and os.path.isdir(path):
+            try:
+                import shutil
+                shutil.rmtree(path, ignore_errors=True)
+            except Exception:
+                pass
+        return True
+
+    def unregister_all(self, delete_dirs: bool = False) -> int:
+        """Unregister all tokens; optionally delete their directories. Returns count removed."""
+        items = list(self._map.items())
+        self._map.clear()
+        if delete_dirs:
+            for _, path in items:
+                if os.path.isdir(path):
+                    try:
+                        import shutil
+                        shutil.rmtree(path, ignore_errors=True)
+                    except Exception:
+                        pass
+        return len(items)
 
     async def _handle_root(self, request: web.Request):
         token = request.match_info.get("token")
@@ -110,10 +113,7 @@ class HtmlHost:
         return web.FileResponse(full)
 
     def _get_valid_dir(self, token: str) -> Optional[str]:
-        item = self._map.get(token)
-        if not item:
-            return None
-        path, exp = item
-        if time.time() > exp:
+        path = self._map.get(token)
+        if not path:
             return None
         return path
